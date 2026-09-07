@@ -59,18 +59,18 @@ export default function AddStudentModal({
 
     // 4. Validate Duplicates (Client-side fast check)
     const duplicateId = existingStudents.find(
-      s => s.StudentID.trim().toUpperCase() === trimmedId.toUpperCase()
+      s => (s.StudentID || s.studentid || '').trim().toUpperCase() === trimmedId.toUpperCase()
     );
     if (duplicateId) {
-      setErrorMessage(`Student ID "${trimmedId}" is already registered (${duplicateId.Name}).`);
+      setErrorMessage(`Student ID "${trimmedId}" is already registered (${duplicateId.Name || duplicateId.name}).`);
       return;
     }
 
     const duplicateEmail = existingStudents.find(
-      s => s.Email.trim().toLowerCase() === trimmedEmail.toLowerCase()
+      s => (s.Email || s.email || '').trim().toLowerCase() === trimmedEmail.toLowerCase()
     );
     if (duplicateEmail) {
-      setErrorMessage(`A student with email "${trimmedEmail}" already exists (${duplicateEmail.Name}).`);
+      setErrorMessage(`A student with email "${trimmedEmail}" already exists (${duplicateEmail.Name || duplicateEmail.name}).`);
       return;
     }
 
