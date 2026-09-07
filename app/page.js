@@ -58,10 +58,10 @@ export default function HomePage() {
 
     try {
       const [coursesRes, studentsRes, registrationsRes, statsRes] = await Promise.all([
-        fetch('/api/courses'),
-        fetch('/api/students'),
-        fetch('/api/registrations'),
-        fetch('/api/stats')
+        fetch('/api/courses', { cache: 'no-store' }),
+        fetch('/api/students', { cache: 'no-store' }),
+        fetch('/api/registrations', { cache: 'no-store' }),
+        fetch('/api/stats', { cache: 'no-store' })
       ]);
 
       const [coursesData, studentsData, registrationsData, statsData] = await Promise.all([
@@ -112,12 +112,32 @@ export default function HomePage() {
   };
 
   // Callback on student added
-  const handleStudentAdded = (student) => {
-    fetchPortalData(true);
+  const handleStudentAdded = async (newStudent) => {
+    // Optimistically update students list and stats immediately
+    setStudents((prev) => {
+      const exists = prev.some(
+        (s) => s.StudentID.toUpperCase() === newStudent.StudentID.toUpperCase()
+      );
+      if (exists) return prev;
+      return [...prev, { ...newStudent, EnrolledCount: 0 }];
+    });
+
+    setStats((prev) =>
+      prev
+        ? {
+            ...prev,
+            totalStudents: (prev.totalStudents || 0) + 1
+          }
+        : prev
+    );
+
+    // Refresh from server to ensure full database synchronization
+    await fetchPortalData(true);
+
     addToast({
       type: 'success',
-      title: 'Student Profile Created',
-      message: `${student.Name} (${student.StudentID}) has been added to the directory.`
+      title: 'Student Registered Successfully!',
+      message: `${newStudent.Name} (${newStudent.StudentID}) has been added to the directory.`
     });
   };
 
@@ -255,6 +275,7 @@ export default function HomePage() {
         isOpen={isAddStudentOpen}
         onClose={() => setIsAddStudentOpen(false)}
         onStudentAdded={handleStudentAdded}
+        existingStudents={students}
       />
 
       {/* Toast Notification Container */}
