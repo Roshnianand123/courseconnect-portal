@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Navbar from '@/components/Navbar';
 import StatsOverview from '@/components/StatsOverview';
 import CourseList from '@/components/CourseList';
@@ -19,7 +19,6 @@ export default function HomePage() {
   const [courses, setCourses] = useState([]);
   const [students, setStudents] = useState([]);
   const [registrations, setRegistrations] = useState([]);
-  const [stats, setStats] = useState(null);
   const [dbStatus, setDbStatus] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -74,9 +73,8 @@ export default function HomePage() {
       if (coursesData.success) setCourses(coursesData.courses || []);
       if (studentsData.success) setStudents(studentsData.students || []);
       if (registrationsData.success) setRegistrations(registrationsData.registrations || []);
-      if (statsData.success) {
-        setStats(statsData.stats);
-        if (statsData.dbStatus) setDbStatus(statsData.dbStatus);
+      if (statsData.success && statsData.dbStatus) {
+        setDbStatus(statsData.dbStatus);
       }
     } catch (err) {
       console.error('Portal load error:', err);
@@ -89,6 +87,22 @@ export default function HomePage() {
   useEffect(() => {
     fetchPortalData();
   }, [fetchPortalData]);
+
+  // Derive dashboard statistics directly from active data (Single Source of Truth)
+  const dashboardStats = useMemo(() => {
+    const totalCourses = courses.length;
+    const totalStudents = students.length;
+    const totalRegistrations = registrations.length;
+    const totalCapacity = courses.reduce((sum, c) => sum + (c.Capacity || 30), 0);
+    const fillRate = totalCapacity > 0 ? Math.round((totalRegistrations / totalCapacity) * 100) : 0;
+
+    return {
+      totalCourses,
+      totalStudents,
+      totalRegistrations,
+      fillRate: `${fillRate}%`
+    };
+  }, [courses, students, registrations]);
 
   // Modal Open Handlers
   const handleOpenRegister = (course = null, student = null) => {
@@ -103,6 +117,41 @@ export default function HomePage() {
 
   // Callback on successful registration
   const handleRegisterSuccess = (registration) => {
+    // Immediately update registrations from source of truth
+    setRegistrations((prev) => {
+      if (prev.some((r) => r.RegistrationID === registration.RegistrationID)) return prev;
+      return [registration, ...prev];
+    });
+
+    // Update course enrollment count & seats
+    setCourses((prev) =>
+      prev.map((c) => {
+        if (c.CourseID.toUpperCase() === (registration.CourseID || '').toUpperCase()) {
+          const enrolled = (c.EnrolledCount || 0) + 1;
+          const capacity = c.Capacity || 30;
+          return {
+            ...c,
+            EnrolledCount: enrolled,
+            SeatsLeft: Math.max(0, capacity - enrolled)
+          };
+        }
+        return c;
+      })
+    );
+
+    // Update student's enrolled courses count
+    setStudents((prev) =>
+      prev.map((s) => {
+        if (s.StudentID.toUpperCase() === (registration.StudentID || '').toUpperCase()) {
+          return {
+            ...s,
+            EnrolledCount: (s.EnrolledCount || 0) + 1
+          };
+        }
+        return s;
+      })
+    );
+
     fetchPortalData(true);
     addToast({
       type: 'success',
@@ -113,7 +162,6 @@ export default function HomePage() {
 
   // Callback on student added
   const handleStudentAdded = async (newStudent) => {
-    // Optimistically update students list and stats immediately
     setStudents((prev) => {
       const exists = prev.some(
         (s) => s.StudentID.toUpperCase() === newStudent.StudentID.toUpperCase()
@@ -122,16 +170,6 @@ export default function HomePage() {
       return [...prev, { ...newStudent, EnrolledCount: 0 }];
     });
 
-    setStats((prev) =>
-      prev
-        ? {
-            ...prev,
-            totalStudents: (prev.totalStudents || 0) + 1
-          }
-        : prev
-    );
-
-    // Refresh from server to ensure full database synchronization
     await fetchPortalData(true);
 
     addToast({
@@ -144,12 +182,48 @@ export default function HomePage() {
   // Callback to delete registration
   const handleDeleteRegistration = async (registrationId) => {
     try {
+      const regToRemove = registrations.find((r) => r.RegistrationID === registrationId);
+
       const res = await fetch(`/api/registrations/${registrationId}`, {
-        method: 'DELETE'
+        method: 'DELETE',
+        headers: { 'Cache-Control': 'no-cache' }
       });
       const data = await res.json();
       if (!res.ok || !data.success) {
         throw new Error(data.error || 'Failed to remove registration');
+      }
+
+      // Immediately remove registration from active state
+      setRegistrations((prev) => prev.filter((r) => r.RegistrationID !== registrationId));
+
+      // Update course seats and enrollment counts
+      if (regToRemove) {
+        setCourses((prev) =>
+          prev.map((c) => {
+            if (c.CourseID.toUpperCase() === (regToRemove.CourseID || '').toUpperCase()) {
+              const enrolled = Math.max(0, (c.EnrolledCount || 0) - 1);
+              const capacity = c.Capacity || 30;
+              return {
+                ...c,
+                EnrolledCount: enrolled,
+                SeatsLeft: Math.max(0, capacity - enrolled)
+              };
+            }
+            return c;
+          })
+        );
+
+        setStudents((prev) =>
+          prev.map((s) => {
+            if (s.StudentID.toUpperCase() === (regToRemove.StudentID || '').toUpperCase()) {
+              return {
+                ...s,
+                EnrolledCount: Math.max(0, (s.EnrolledCount || 0) - 1)
+              };
+            }
+            return s;
+          })
+        );
       }
 
       await fetchPortalData(true);
@@ -185,9 +259,9 @@ export default function HomePage() {
         dbStatus={dbStatus}
       />
 
-      {/* Metric Cards Banner */}
+      {/* Metric Cards Banner - Derived from Single Source of Truth */}
       <StatsOverview
-        stats={stats}
+        stats={dashboardStats}
         onSelectTab={(tab) => {
           setActiveTab(tab);
           setFilterStudentId('ALL');
